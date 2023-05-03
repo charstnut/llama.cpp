@@ -1,8 +1,19 @@
 #include "ggml.h"
 #include "llama.h"
+#include "build-info.h"
 
 #include <cstdio>
+#include <map>
 #include <string>
+
+static const std::map<std::string, enum llama_ftype> LLAMA_FTYPE_MAP = {
+  {"q4_0", LLAMA_FTYPE_MOSTLY_Q4_0},
+  {"q4_1", LLAMA_FTYPE_MOSTLY_Q4_1},
+  {"q4_2", LLAMA_FTYPE_MOSTLY_Q4_2},
+  {"q5_0", LLAMA_FTYPE_MOSTLY_Q5_0},
+  {"q5_1", LLAMA_FTYPE_MOSTLY_Q5_1},
+  {"q8_0", LLAMA_FTYPE_MOSTLY_Q8_0},
+};
 
 // usage:
 //  ./quantize models/llama/ggml-model.bin models/llama/ggml-model-quant.bin type
@@ -10,11 +21,11 @@
 int main(int argc, char ** argv) {
     ggml_time_init();
 
-    if (argc != 4) {
-        fprintf(stderr, "usage: %s model-f32.bin model-quant.bin type\n", argv[0]);
-        fprintf(stderr, "  type = %d - q4_0\n", LLAMA_FTYPE_MOSTLY_Q4_0);
-        fprintf(stderr, "  type = %d - q4_1\n", LLAMA_FTYPE_MOSTLY_Q4_1);
-        fprintf(stderr, "  type = %d - q4_2\n", LLAMA_FTYPE_MOSTLY_Q4_2);
+    if (argc < 4) {
+        fprintf(stderr, "usage: %s model-f32.bin model-quant.bin type [nthread]\n", argv[0]);
+        for (auto it = LLAMA_FTYPE_MAP.begin(); it != LLAMA_FTYPE_MAP.end(); it++) {
+            fprintf(stderr, "  type = \"%s\" or %d\n", it->first.c_str(), it->second);
+        }
         return 1;
     }
 
@@ -28,7 +39,21 @@ int main(int argc, char ** argv) {
     const std::string fname_inp = argv[1];
     const std::string fname_out = argv[2];
 
-    const enum llama_ftype ftype = (enum llama_ftype)atoi(argv[3]);
+    enum llama_ftype ftype;
+    if (argv[3][0] == 'q') {
+        auto it = LLAMA_FTYPE_MAP.find(argv[3]);
+        if (it == LLAMA_FTYPE_MAP.end()) {
+            fprintf(stderr, "%s: unknown ftype '%s'\n", __func__, argv[3]);
+            return 1;
+        }
+        ftype = it->second;
+    } else {
+        ftype = (enum llama_ftype)atoi(argv[3]);
+    }
+
+    fprintf(stderr, "%s: build = %d (%s)\n", __func__, BUILD_NUMBER, BUILD_COMMIT);
+
+    int nthread = argc > 4 ? atoi(argv[4]) : 0;
 
     const int64_t t_main_start_us = ggml_time_us();
 
@@ -38,7 +63,7 @@ int main(int argc, char ** argv) {
     {
         const int64_t t_start_us = ggml_time_us();
 
-        if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), ftype)) {
+        if (llama_model_quantize(fname_inp.c_str(), fname_out.c_str(), ftype, nthread)) {
             fprintf(stderr, "%s: failed to quantize model from '%s'\n", __func__, fname_inp.c_str());
             return 1;
         }

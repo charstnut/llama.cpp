@@ -66,9 +66,44 @@ endif()
 # 3rd party libs
 option(LLAMA_ACCELERATE             "llama: enable Accelerate framework"                    ON)
 option(LLAMA_OPENBLAS               "llama: use OpenBLAS"                                   OFF)
+option(LLAMA_CUBLAS                 "llama: use cuBLAS"                                     OFF)
+option(LLAMA_CLBLAST                "llama: use CLBlast"                                    OFF)
 
 option(LLAMA_BUILD_TESTS            "llama: build tests"    ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES         "llama: build examples" ${LLAMA_STANDALONE})
+
+#
+# Build info header
+#
+
+# Generate initial build-info.h
+include(${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-info.cmake)
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    set(GIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+
+    # Is git submodule
+    if(NOT IS_DIRECTORY "${GIT_DIR}")
+        file(READ ${GIT_DIR} REAL_GIT_DIR_LINK)
+        string(REGEX REPLACE "gitdir: (.*)\n$" "\\1" REAL_GIT_DIR ${REAL_GIT_DIR_LINK})
+        set(GIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${REAL_GIT_DIR}")
+    endif()
+
+    # Add a custom target for build-info.h
+    add_custom_target(BUILD_INFO ALL DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/build-info.h")
+
+    # Add a custom command to rebuild build-info.h when .git/index changes
+    add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/build-info.h"
+        COMMENT "Generating build details from Git"
+        COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-info.cmake"
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        DEPENDS "${GIT_DIR}/index"
+        VERBATIM
+    )
+else()
+    message(WARNING "Git repository not found; to enable automatic generation of build info, make sure Git is installed and the project is a Git repository.")
+endif()
 
 #
 # Compile flags
@@ -109,6 +144,7 @@ if (APPLE AND LLAMA_ACCELERATE)
         message(WARNING "Accelerate framework not found")
     endif()
 endif()
+
 if (LLAMA_OPENBLAS)
     if (LLAMA_STATIC)
         set(BLA_STATIC ON)
@@ -142,6 +178,45 @@ if (LLAMA_OPENBLAS)
     endif()
 endif()
 
+if (LLAMA_CUBLAS)
+    cmake_minimum_required(VERSION 3.17)
+
+    find_package(CUDAToolkit)
+    if (CUDAToolkit_FOUND)
+        message(STATUS "cuBLAS found")
+
+        enable_language(CUDA)
+
+        set(GGML_CUDA_SOURCES ggml-cuda.cu ggml-cuda.h)
+
+        add_compile_definitions(GGML_USE_CUBLAS)
+
+        if (LLAMA_STATIC)
+            set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
+        else()
+            set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} CUDA::cudart CUDA::cublas CUDA::cublasLt)
+        endif()
+
+    else()
+        message(WARNING "cuBLAS not found")
+    endif()
+endif()
+
+if (LLAMA_CLBLAST)
+    find_package(CLBlast)
+    if (CLBlast_FOUND)
+        message(STATUS "CLBlast found")
+
+        set(GGML_OPENCL_SOURCES ggml-opencl.c ggml-opencl.h)
+
+        add_compile_definitions(GGML_USE_CLBLAST)
+
+        set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} clblast)
+    else()
+        message(WARNING "CLBlast not found")
+    endif()
+endif()
+
 if (LLAMA_ALL_WARNINGS)
     if (NOT MSVC)
         set(c_flags
@@ -153,7 +228,6 @@ if (LLAMA_ALL_WARNINGS)
             -Wshadow
             -Wstrict-prototypes
             -Wpointer-arith
-            -Wno-unused-function
         )
         set(cxx_flags
             -Wall
@@ -176,6 +250,10 @@ endif()
 
 if (MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+
+    if (BUILD_SHARED_LIBS)
+        set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    endif()
 endif()
 
 if (LLAMA_LTO)
@@ -213,29 +291,47 @@ if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm" OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES
         # TODO: arm msvc?
     else()
         if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+            # Apple M1, M2, etc.
+            # Raspberry Pi 3, 4, Zero 2 (64-bit)
             add_compile_options(-mcpu=native)
         endif()
-        # TODO: armv6,7,8 version specific flags
+        if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "armv6")
+            # Raspberry Pi 1, Zero
+            add_compile_options(-mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access)
+        endif()
+        if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "armv7")
+            # Raspberry Pi 2
+            add_compile_options(-mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations)
+        endif()
+        if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "armv8")
+            # Raspberry Pi 3, 4, Zero 2 (32-bit)
+            add_compile_options(-mfp16-format=ieee -mno-unaligned-access)
+        endif()
     endif()
 elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "^(x86_64|i686|AMD64)$")
     message(STATUS "x86 detected")
     if (MSVC)
         if (LLAMA_AVX512)
-            add_compile_options(/arch:AVX512)
+            add_compile_options($<$<COMPILE_LANGUAGE:C>:/arch:AVX512>)
+            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX512>)
             # MSVC has no compile-time flags enabling specific
             # AVX512 extensions, neither it defines the
             # macros corresponding to the extensions.
             # Do it manually.
             if (LLAMA_AVX512_VBMI)
-                add_compile_definitions(__AVX512VBMI__)
+                add_compile_definitions($<$<COMPILE_LANGUAGE:C>:__AVX512VBMI__>)
+                add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:__AVX512VBMI__>)
             endif()
             if (LLAMA_AVX512_VNNI)
-                add_compile_definitions(__AVX512VNNI__)
+                add_compile_definitions($<$<COMPILE_LANGUAGE:C>:__AVX512VNNI__>)
+                add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:__AVX512VNNI__>)
             endif()
         elseif (LLAMA_AVX2)
-            add_compile_options(/arch:AVX2)
+            add_compile_options($<$<COMPILE_LANGUAGE:C>:/arch:AVX2>)
+            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>)
         elseif (LLAMA_AVX)
-            add_compile_options(/arch:AVX)
+            add_compile_options($<$<COMPILE_LANGUAGE:C>:/arch:AVX>)
+            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX>)
         endif()
     else()
         if (LLAMA_F16C)
@@ -261,8 +357,11 @@ elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "^(x86_64|i686|AMD64)$")
             add_compile_options(-mavx512vnni)
         endif()
     endif()
+elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "ppc64")
+    message(STATUS "PowerPC detected")
+    add_compile_options(-mcpu=native -mtune=native)
+    #TODO: Add  targets for Power8/Power9 (Altivec/VSX) and Power10(MMA) and query for big endian systems (ppc64/le/be)
 else()
-    # TODO: support PowerPC
     message(STATUS "Unknown architecture")
 endif()
 
@@ -272,11 +371,14 @@ endif()
 
 add_library(ggml OBJECT
             ggml.c
-            ggml.h)
+            ggml.h
+            ${GGML_CUDA_SOURCES}
+            ${GGML_OPENCL_SOURCES})
 
 target_include_directories(ggml PUBLIC .)
 target_compile_features(ggml PUBLIC c_std_11) # don't bump
-target_link_libraries(ggml PRIVATE Threads::Threads ${LLAMA_EXTRA_LIBS})
+target_link_libraries(ggml PUBLIC Threads::Threads ${LLAMA_EXTRA_LIBS})
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
@@ -284,15 +386,24 @@ endif()
 add_library(llama
             llama.cpp
             llama.h
-            llama_util.h)
+            llama-util.h)
 
 target_include_directories(llama PUBLIC .)
 target_compile_features(llama PUBLIC cxx_std_11) # don't bump
 target_link_libraries(llama PRIVATE ggml ${LLAMA_EXTRA_LIBS})
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_SHARED LLAMA_BUILD)
 endif()
+
+if (GGML_CUDA_SOURCES)
+    message(STATUS "GGML CUDA sources found, configuring CUDA architecture")
+    set_property(TARGET ggml PROPERTY CUDA_ARCHITECTURES OFF)
+    set_property(TARGET ggml PROPERTY CUDA_SELECT_NVCC_ARCH_FLAGS "Auto")
+    set_property(TARGET llama PROPERTY CUDA_ARCHITECTURES OFF)
+endif()
+
 
 #
 # programs, examples and tests

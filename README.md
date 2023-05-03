@@ -9,25 +9,23 @@ Inference of [LLaMA](https://arxiv.org/abs/2302.13971) model in pure C/C++
 
 **Hot topics:**
 
-- [Added LoRA support](https://github.com/ggerganov/llama.cpp/pull/820)
-- [Add GPU support to ggml](https://github.com/ggerganov/llama.cpp/discussions/915)
-- [Roadmap Apr 2023](https://github.com/ggerganov/llama.cpp/discussions/784)
+- [Roadmap May 2023](https://github.com/ggerganov/llama.cpp/discussions/1220)
+- [New quantization methods](https://github.com/ggerganov/llama.cpp#quantization)
 
 ## Description
 
-The main goal is to run the model using 4-bit quantization on a MacBook
+The main goal of `llama.cpp` is to run the LLaMA model using 4-bit integer quantization on a MacBook
 
 - Plain C/C++ implementation without dependencies
 - Apple silicon first-class citizen - optimized via ARM NEON and Accelerate framework
 - AVX2 support for x86 architectures
 - Mixed F16 / F32 precision
-- 4-bit quantization support
+- 4-bit integer quantization support
 - Runs on the CPU
 
-This was [hacked in an evening](https://github.com/ggerganov/llama.cpp/issues/33#issuecomment-1465108022) - I have no idea if it works correctly.
-Please do not make conclusions about the models based on the results from this implementation.
-For all I know, it can be completely wrong. This project is for educational purposes.
-New features will probably be added mostly through community contributions.
+The original implementation of `llama.cpp` was [hacked in an evening](https://github.com/ggerganov/llama.cpp/issues/33#issuecomment-1465108022).
+Since then, the project has improved significantly thanks to many contributions. This project is for educational purposes and serves
+as the main playground for developing new features for the [ggml](https://github.com/ggerganov/ggml) library.
 
 **Supported platforms:**
 
@@ -152,7 +150,7 @@ https://user-images.githubusercontent.com/1991296/224442907-7693d4be-acaa-4e01-8
 
 ## Usage
 
-Here are the step for the LLaMA-7B model.
+Here are the steps for the LLaMA-7B model.
 
 ### Get the Code
 
@@ -163,15 +161,27 @@ cd llama.cpp
 
 ### Build
 
-Note: For Windows, CMake or Zig can be used.
+In order to build llama.cpp you have three different options.
 
-1. Use `make`
+- Using `make`:
+  - On Linux or MacOS:
 
-    ```bash
-    make
-    ```
+      ```bash
+      make
+      ```
 
-1. Use CMake
+  - On Windows:
+
+    1. Download the latest fortran version of [w64devkit](https://github.com/skeeto/w64devkit/releases).
+    2. Extract `w64devkit` on your pc.
+    3. Run `w64devkit.exe`.
+    4. Use the `cd` command to reach the `llama.cpp` folder.
+    5. From here you can run:
+        ```bash
+        make
+        ```
+
+- Using `CMake`:
 
     ```bash
     mkdir build
@@ -180,10 +190,69 @@ Note: For Windows, CMake or Zig can be used.
     cmake --build . --config Release
     ```
 
-1. Use Zig
+- Using `Zig`:
 
     ```bash
     zig build -Drelease-fast
+    ```
+
+### BLAS Build
+
+Building the program with BLAS support may lead to some performance improvements in prompt processing using batch sizes higher than 32 (the default is 512). BLAS doesn't affect the normal generation performance. There are currently three different implementations of it:
+
+- Accelerate Framework:
+
+  This is only available on Mac PCs and it's enabled by default. You can just build using the normal instructions.
+
+- OpenBLAS:
+
+  This provides BLAS acceleration using only the CPU. Make sure to have OpenBLAS installed on your machine.
+
+  - Using `make`:
+    - On Linux:
+      ```bash
+      make LLAMA_OPENBLAS=1
+      ```
+      Note: In order to build on Arch Linux with OpenBLAS support enabled you must edit the Makefile adding at the end of the line 105: `-lcblas`
+
+    - On Windows:
+
+      1. Download the latest fortran version of [w64devkit](https://github.com/skeeto/w64devkit/releases).
+      2. Download the latest version of [OpenBLAS for Windows](https://github.com/xianyi/OpenBLAS/releases).
+      3. Extract `w64devkit` on your pc.
+      4. From the OpenBLAS zip that you just downloaded copy `libopenblas.a`, located inside the `lib` folder, inside `w64devkit\x86_64-w64-mingw32\lib`.
+      5. From the same OpenBLAS zip copy the content of the `include` folder inside `w64devkit\x86_64-w64-mingw32\include`.
+      6. Run `w64devkit.exe`.
+      7. Use the `cd` command to reach the `llama.cpp` folder.
+      8. From here you can run:
+
+          ```bash
+          make LLAMA_OPENBLAS=1
+          ```
+
+  - Using `CMake` on Linux:
+
+      ```bash
+      mkdir build
+      cd build
+      cmake .. -DLLAMA_OPENBLAS=ON
+      cmake --build . --config Release
+      ```
+
+- cuBLAS
+
+  This provides BLAS acceleration using the CUDA cores of your Nvidia GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager or from here: [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads).
+  - Using `make`:
+    ```bash
+    make LLAMA_CUBLAS=1
+    ```
+  - Using `CMake`:
+
+    ```bash
+    mkdir build
+    cd build
+    cmake .. -DLLAMA_CUBLAS=ON
+    cmake --build . --config Release
     ```
 
 ### Prepare Data & Run
@@ -199,8 +268,8 @@ python3 -m pip install -r requirements.txt
 # convert the 7B model to ggml FP16 format
 python3 convert.py models/7B/
 
-# quantize the model to 4-bits (using method 2 = q4_0)
-./quantize ./models/7B/ggml-model-f16.bin ./models/7B/ggml-model-q4_0.bin 2
+# quantize the model to 4-bits (using q4_0 method)
+./quantize ./models/7B/ggml-model-f16.bin ./models/7B/ggml-model-q4_0.bin q4_0
 
 # run the inference
 ./main -m ./models/7B/ggml-model-q4_0.bin -n 128
@@ -210,35 +279,51 @@ When running the larger models, make sure you have enough disk space to store al
 
 ### Memory/Disk Requirements
 
-As the models are currently fully loaded into memory, you will need adequate disk space to save them
-and sufficient RAM to load them. At the moment, memory and disk requirements are the same.
+As the models are currently fully loaded into memory, you will need adequate disk space to save them and sufficient RAM to load them. At the moment, memory and disk requirements are the same.
 
-| model | original size | quantized size (4-bit) |
-|-------|---------------|------------------------|
-| 7B    | 13 GB         | 3.9 GB                 |
-| 13B   | 24 GB         | 7.8 GB                 |
-| 30B   | 60 GB         | 19.5 GB                |
-| 65B   | 120 GB        | 38.5 GB                |
+| Model | Original size | Quantized size (4-bit) |
+|------:|--------------:|-----------------------:|
+|    7B |         13 GB |                 3.9 GB |
+|   13B |         24 GB |                 7.8 GB |
+|   30B |         60 GB |                19.5 GB |
+|   65B |        120 GB |                38.5 GB |
+
+### Quantization
+
+Several quantization methods are supported. They differ in the resulting model disk size and inference speed.
+
+| Model | Measure      | F16    | Q4_0   | Q4_1   | Q4_2   | Q5_0   | Q5_1   | Q8_0   |
+|------:|--------------|-------:|-------:|-------:|-------:|-------:|-------:|-------:|
+|    7B | perplexity   | 5.9565 | 6.2103 | 6.1286 | 6.1698 | 6.0139 | 5.9934 | 5.9571 |
+|    7B | file size    |  13.0G |   4.0G |   4.8G |   4.0G |   4.4G |   4.8G |   7.1G |
+|    7B | ms/tok @ 4th |    128 |     56 |     61 |     84 |     91 |     95 |     75 |
+|    7B | ms/tok @ 8th |    128 |     47 |     55 |     48 |     53 |     59 |     75 |
+|    7B | bits/weight  |   16.0 |    5.0 |    6.0 |    5.0 |    5.5 |    6.0 |    9.0 |
+|   13B | perplexity   | 5.2455 | 5.3748 | 5.3471 | 5.3433 | 5.2768 | 5.2582 | 5.2458 |
+|   13B | file size    |  25.0G |   7.6G |   9.1G |   7.6G |   8.4G |   9.1G |    14G |
+|   13B | ms/tok @ 4th |    239 |    104 |    113 |    160 |    176 |    185 |    141 |
+|   13B | ms/tok @ 8th |    240 |     85 |     99 |     97 |    108 |    117 |    147 |
+|   13B | bits/weight  |   16.0 |    5.0 |    6.0 |    5.0 |    5.5 |    6.0 |    9.0 |
 
 ### Interactive mode
 
 If you want a more ChatGPT-like experience, you can run in interactive mode by passing `-i` as a parameter.
-In this mode, you can always interrupt generation by pressing Ctrl+C and enter one or more lines of text which will be converted into tokens and appended to the current context. You can also specify a *reverse prompt* with the parameter `-r "reverse prompt string"`. This will result in user input being prompted whenever the exact tokens of the reverse prompt string are encountered in the generation. A typical use is to use a prompt which makes LLaMa emulate a chat between multiple users, say Alice and Bob, and pass `-r "Alice:"`.
+In this mode, you can always interrupt generation by pressing Ctrl+C and entering one or more lines of text, which will be converted into tokens and appended to the current context. You can also specify a *reverse prompt* with the parameter `-r "reverse prompt string"`. This will result in user input being prompted whenever the exact tokens of the reverse prompt string are encountered in the generation. A typical use is to use a prompt that makes LLaMa emulate a chat between multiple users, say Alice and Bob, and pass `-r "Alice:"`.
 
-Here is an example few-shot interaction, invoked with the command
+Here is an example of a few-shot interaction, invoked with the command
 
 ```bash
-# default arguments using 7B model
+# default arguments using a 7B model
 ./examples/chat.sh
 
-# advanced chat with 13B model
+# advanced chat with a 13B model
 ./examples/chat-13B.sh
 
-# custom arguments using 13B model
+# custom arguments using a 13B model
 ./main -m ./models/13B/ggml-model-q4_0.bin -n 256 --repeat_penalty 1.0 --color -i -r "User:" -f prompts/chat-with-bob.txt
 ```
 
-Note the use of `--color` to distinguish between user input and generated text.
+Note the use of `--color` to distinguish between user input and generated text. Other parameters are explained in more detail in the [README](examples/main/README.md) for the `main` example program.
 
 ![image](https://user-images.githubusercontent.com/1991296/224575029-2af3c7dc-5a65-4f64-a6bb-517a532aea38.png)
 
@@ -272,22 +357,23 @@ cadaver, cauliflower, cabbage (vegetable), catalpa (tree) and Cailleach.
 
 ### Using [GPT4All](https://github.com/nomic-ai/gpt4all)
 
-- Obtain the `gpt4all-lora-quantized.bin` model
+- Obtain the `tokenizer.model` file from LLaMA model and put it to `models`
+- Obtain the `added_tokens.json` file from Alpaca model and put it to `models`
+- Obtain the `gpt4all-lora-quantized.bin` file from GPT4All model and put it to `models/gpt4all-7B`
 - It is distributed in the old `ggml` format which is now obsoleted
-- You have to convert it to the new format using [./convert-gpt4all-to-ggml.py](./convert-gpt4all-to-ggml.py). You may also need to
-convert the model from the old format to the new format with [./migrate-ggml-2023-03-30-pr613.py](./migrate-ggml-2023-03-30-pr613.py):
+- You have to convert it to the new format using `convert.py`:
 
-  ```bash
-  python3 convert-gpt4all-to-ggml.py models/gpt4all-7B/gpt4all-lora-quantized.bin ./models/tokenizer.model
-  python3 migrate-ggml-2023-03-30-pr613.py models/gpt4all-7B/gpt4all-lora-quantized.bin models/gpt4all-7B/gpt4all-lora-quantized-new.bin
-  ```
+```bash
+python3 convert.py models/gpt4all-7B/gpt4all-lora-quantized.bin
+```
 
-- You can now use the newly generated `gpt4all-lora-quantized-new.bin` model in exactly the same way as all other models
-- The original model is saved in the same folder with a suffix `.orig`
+- You can now use the newly generated `models/gpt4all-7B/ggml-model-q4_0.bin` model in exactly the same way as all other models
+
+- The newer GPT4All-J model is not yet supported!
 
 ### Obtaining and verifying the Facebook LLaMA original model and Stanford Alpaca model data
 
-- **Under no circumstances share IPFS, magnet links, or any other links to model downloads anywhere in this respository, including in issues, discussions or pull requests. They will be immediately deleted.**
+- **Under no circumstances should IPFS, magnet links, or any other links to model downloads be shared anywhere in this repository, including in issues, discussions, or pull requests. They will be immediately deleted.**
 - The LLaMA models are officially distributed by Facebook and will **never** be provided through this repository.
 - Refer to [Facebook's LLaMA repository](https://github.com/facebookresearch/llama/pull/73/files) if you need to request access to the model data.
 - Please verify the [sha256 checksums](SHA256SUMS) of all downloaded model files to confirm that you have the correct model data files before creating an issue relating to your model files.
@@ -299,29 +385,27 @@ convert the model from the old format to the new format with [./migrate-ggml-202
 
   `shasum -a 256 --ignore-missing -c SHA256SUMS` on macOS
 
-- If your issue is with model generation quality then please at least scan the following links and papers to understand the limitations of LLaMA models. This is especially important when choosing an appropriate model size and appreciating both the significant and subtle differences between LLaMA models and ChatGPT:
-  - LLaMA:
-    - [Introducing LLaMA: A foundational, 65-billion-parameter large language model](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
-    - [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)
-  - GPT-3
-    - [Language Models are Few-Shot Learners](https://arxiv.org/abs/2005.14165)
-  - GPT-3.5 / InstructGPT / ChatGPT:
-    - [Aligning language models to follow instructions](https://openai.com/research/instruction-following)
-    - [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155)
+- If your issue is with model generation quality, then please at least scan the following links and papers to understand the limitations of LLaMA models. This is especially important when choosing an appropriate model size and appreciating both the significant and subtle differences between LLaMA models and ChatGPT:
+- LLaMA:
+- [Introducing LLaMA: A foundational, 65-billion-parameter large language model](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
+- [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)
+- GPT-3
+- [Language Models are Few-Shot Learners](https://arxiv.org/abs/2005.14165)
+- GPT-3.5 / InstructGPT / ChatGPT:
+- [Aligning language models to follow instructions](https://openai.com/research/instruction-following)
+- [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155)
 
-### Perplexity (Measuring model quality)
+### Perplexity (measuring model quality)
 
-You can use the `perplexity` example to measure perplexity over the given prompt.  For more background,
-see https://huggingface.co/docs/transformers/perplexity.  However, in general, lower perplexity is better for LLMs.
+You can use the `perplexity` example to measure perplexity over the given prompt. For more background, see [https://huggingface.co/docs/transformers/perplexity](https://huggingface.co/docs/transformers/perplexity). However, in general, lower perplexity is better for LLMs.
 
 #### Latest measurements
 
-The latest perplexity scores for the various model sizes and quantizations are being tracked in [discussion #406](https://github.com/ggerganov/llama.cpp/discussions/406).  `llama.cpp` is measuring very well
-compared to the baseline implementations.  Quantization has a small negative impact to quality, but, as you can see, running
+The latest perplexity scores for the various model sizes and quantizations are being tracked in [discussion #406](https://github.com/ggerganov/llama.cpp/discussions/406). `llama.cpp` is measuring very well compared to the baseline implementations. Quantization has a small negative impact on quality, but, as you can see, running
 13B at q4_0 beats the 7B f16 model by a significant amount.
 
-All measurements are done against wikitext2 test dataset (https://paperswithcode.com/dataset/wikitext-2), with default options (512 length context).
-Note that the changing the context length will have a significant impact on perplexity (longer context = better perplexity).
+All measurements are done against the wikitext2 test dataset (https://paperswithcode.com/dataset/wikitext-2), with default options (512 length context).
+Note that changing the context length will have a significant impact on perplexity (longer context = better perplexity).
 ```
 Perplexity - model options
 5.5985 - 13B, q4_0
@@ -363,7 +447,7 @@ https://user-images.githubusercontent.com/271616/225014776-1d567049-ad71-4ef2-b0
 
 #### Prerequisites
 * Docker must be installed and running on your system.
-* Create a folder to store big models & intermediate files (in ex. im using /llama/models)
+* Create a folder to store big models & intermediate files (ex. /llama/models)
 
 #### Images
 We have two Docker images available for this project:
@@ -377,17 +461,17 @@ The easiest way to download the models, convert them to ggml and optimize them i
 
 Replace `/path/to/models` below with the actual path where you downloaded the models.
 
- ```bash
+```bash
 docker run -v /path/to/models:/models ghcr.io/ggerganov/llama.cpp:full --all-in-one "/models/" 7B
 ```
 
-On complete, you are ready to play!
+On completion, you are ready to play!
 
 ```bash
 docker run -v /path/to/models:/models ghcr.io/ggerganov/llama.cpp:full --run -m /models/7B/ggml-model-q4_0.bin -p "Building a website can be done in 10 simple steps:" -n 512
 ```
 
-or with light image:
+or with a light image:
 
 ```bash
 docker run -v /path/to/models:/models ghcr.io/ggerganov/llama.cpp:light -m /models/7B/ggml-model-q4_0.bin -p "Building a website can be done in 10 simple steps:" -n 512
@@ -408,7 +492,7 @@ docker run -v /path/to/models:/models ghcr.io/ggerganov/llama.cpp:light -m /mode
 - Always consider cross-compatibility with other operating systems and architectures
 - Avoid fancy looking modern STL constructs, use basic `for` loops, avoid templates, keep it simple
 - There are no strict rules for the code style, but try to follow the patterns in the code (indentation, spaces, etc.). Vertical alignment makes things more readable and easier to batch edit
-- Clean-up any trailing whitespaces, use 4 spaces indentation, brackets on same line, `void * ptr`, `int & a`
+- Clean-up any trailing whitespaces, use 4 spaces for indentation, brackets on the same line, `void * ptr`, `int & a`
 - See [good first issues](https://github.com/ggerganov/llama.cpp/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) for tasks suitable for first contributions
 
 ### Docs

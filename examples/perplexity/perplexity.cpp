@@ -1,5 +1,6 @@
 #include "common.h"
 #include "llama.h"
+#include "build-info.h"
 
 #include <cmath>
 #include <ctime>
@@ -53,7 +54,13 @@ void perplexity(llama_context * ctx, const gpt_params & params) {
         auto end_t = std::chrono::high_resolution_clock::now();
         if (i == 0) {
             const float seconds = std::chrono::duration<float>(end_t - start_t).count();
-            printf("%.2f seconds per pass - ETA %.2f hours\n", seconds, (seconds * seq_count) / (60.0*60.0));
+            printf("%.2f seconds per pass - ETA ", seconds);
+            int total_seconds = (int)(seconds * seq_count);
+            if (total_seconds >= 60*60) {
+                printf("%d hours ", total_seconds / (60*60));
+                total_seconds = total_seconds % (60*60);
+            }
+            printf("%d minutes\n", total_seconds / 60);
         }
         // We get the logits for all the tokens in the context window (params.n_ctx)
         // from llama_eval above.  Now, based on https://huggingface.co/docs/transformers/perplexity,
@@ -100,11 +107,13 @@ int main(int argc, char ** argv) {
                 "expect poor results\n", __func__, params.n_ctx);
     }
 
-    if (params.seed <= 0) {
+    fprintf(stderr, "%s: build = %d (%s)\n", __func__, BUILD_NUMBER, BUILD_COMMIT);
+
+    if (params.seed < 0) {
         params.seed = time(NULL);
     }
 
-    fprintf(stderr, "%s: seed = %d\n", __func__, params.seed);
+    fprintf(stderr, "%s: seed  = %d\n", __func__, params.seed);
 
     std::mt19937 rng(params.seed);
     if (params.random_prompt) {
@@ -113,36 +122,11 @@ int main(int argc, char ** argv) {
 
     llama_context * ctx;
 
-    // load the model
-    {
-        auto lparams = llama_context_default_params();
-
-        lparams.n_ctx      = params.n_ctx;
-        lparams.n_parts    = params.n_parts;
-        lparams.seed       = params.seed;
-        lparams.f16_kv     = params.memory_f16;
-        lparams.logits_all = params.perplexity;
-        lparams.use_mmap   = params.use_mmap;
-        lparams.use_mlock  = params.use_mlock;
-        lparams.embedding  = params.embedding;
-
-        ctx = llama_init_from_file(params.model.c_str(), lparams);
-
-        if (ctx == NULL) {
-            fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params.model.c_str());
-            return 1;
-        }
-    }
-
-    if (!params.lora_adapter.empty()) {
-        int err = llama_apply_lora_from_file(ctx,
-                                             params.lora_adapter.c_str(),
-                                             params.lora_base.empty() ? NULL : params.lora_base.c_str(),
-                                             params.n_threads);
-        if (err != 0) {
-            fprintf(stderr, "%s: error: failed to apply lora adapter\n", __func__);
-            return 1;
-        }
+    // load the model and apply lora adapter, if any
+    ctx = llama_init_from_gpt_params(params);
+    if (ctx == NULL) {
+        fprintf(stderr, "%s: error: unable to load model\n", __func__);
+        return 1;
     }
 
     // print system information
