@@ -74,6 +74,15 @@ ifeq ($(UNAME_S),Haiku)
 	CXXFLAGS += -pthread
 endif
 
+ifdef LLAMA_GPROF
+	CFLAGS   += -pg
+	CXXFLAGS += -pg
+endif
+ifdef LLAMA_PERF
+	CFLAGS   += -DGGML_PERF
+	CXXFLAGS += -DGGML_PERF
+endif
+
 # Architecture specific
 # TODO: probably these flags need to be tweaked on some architectures
 #       feel free to update the Makefile for your architecture and send a pull request or issue
@@ -106,8 +115,16 @@ ifndef LLAMA_NO_ACCELERATE
 	endif
 endif
 ifdef LLAMA_OPENBLAS
-	CFLAGS  += -DGGML_USE_OPENBLAS -I/usr/local/include/openblas
-	LDFLAGS += -lopenblas
+	CFLAGS  += -DGGML_USE_OPENBLAS -I/usr/local/include/openblas -I/usr/include/openblas
+	ifneq ($(shell grep -e "Arch Linux" -e "ID_LIKE=arch" /etc/os-release 2>/dev/null),)
+		LDFLAGS += -lopenblas -lcblas
+	else
+		LDFLAGS += -lopenblas
+	endif
+endif
+ifdef LLAMA_BLIS
+	CFLAGS += -DGGML_USE_OPENBLAS -I/usr/local/include/blis -I/usr/include/blis
+	LDFLAGS += -lblis -L/usr/local/lib
 endif
 ifdef LLAMA_CUBLAS
 	CFLAGS    += -DGGML_USE_CUBLAS -I/usr/local/cuda/include -I/opt/cuda/include -I$(CUDA_PATH)/targets/x86_64-linux/include
@@ -121,18 +138,15 @@ ggml-cuda.o: ggml-cuda.cu ggml-cuda.h
 endif
 ifdef LLAMA_CLBLAST
 	CFLAGS  += -DGGML_USE_CLBLAST
-	LDFLAGS += -lclblast -lOpenCL
+	# Mac provides OpenCL as a framework
+	ifeq ($(UNAME_S),Darwin)
+		LDFLAGS += -lclblast -framework OpenCL
+	else
+		LDFLAGS += -lclblast -lOpenCL
+	endif
 	OBJS    += ggml-opencl.o
 ggml-opencl.o: ggml-opencl.c ggml-opencl.h
 	$(CC) $(CFLAGS) -c $< -o $@
-endif
-ifdef LLAMA_GPROF
-	CFLAGS   += -pg
-	CXXFLAGS += -pg
-endif
-ifdef LLAMA_PERF
-	CFLAGS   += -DGGML_PERF
-	CXXFLAGS += -DGGML_PERF
 endif
 ifneq ($(filter aarch64%,$(UNAME_M)),)
 	# Apple M1, M2, etc.
